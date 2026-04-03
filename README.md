@@ -97,7 +97,7 @@ Motor cortex neurons exhibit tuning curves where firing rate is approximately co
 ## Repository structure
 
 ```
-neural-trajectory-decoder/
+Neural-Spike-Train-Analysis/
 |
 +-- data/                              # DVC-tracked (not in git)
 |   +-- raw/                           #   .nev/.nsx (BlackRock) or .mat recordings
@@ -194,8 +194,8 @@ neural-trajectory-decoder/
 ### Installation
 
 ```bash
-git clone https://github.com/your-org/neural-trajectory-decoder.git
-cd neural-trajectory-decoder
+git clone https://github.com/your-org/Neural-Spike-Train-Analysis.git
+cd Neural-Spike-Train-Analysis
 
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
