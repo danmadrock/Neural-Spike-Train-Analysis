@@ -7,11 +7,9 @@ from collections.abc import Iterator, Sequence
 
 def leave_one_trial_out(trials: Sequence[object]) -> Iterator[tuple[list[int], int]]:
     """Yield ``(train_indices, test_index)`` for every trial.
-
     The test index is always excluded from train indices, which keeps fold-level
     preprocessing (e.g., PCA.fit) restricted to training data only.
     """
-
     n_trials = len(trials)
     if n_trials == 0:
         return
