@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 import hydra
 import lightning as L
 import mlflow
+import mlflow.pytorch as mlflow_pytorch
 import numpy as np
 import torch
 from lightning.pytorch.callbacks import EarlyStopping
@@ -92,20 +94,7 @@ class DecoderLightningModule(L.LightningModule):
         mlflow.log_params(flat_cfg)
 
     def on_validation_epoch_end(self) -> None:
-        metrics = self.trainer.callback_metrics
-        payload = {
-            "train_loss": float(
-                metrics.get("train_loss_epoch", torch.tensor(float("nan"))).item()
-            ),
-            "val_loss": float(
-                metrics.get("val_loss", torch.tensor(float("nan"))).item()
-            ),
-            "val_r2": float(metrics.get("val_r2", torch.tensor(float("nan"))).item()),
-            "val_rmse": float(
-                metrics.get("val_rmse", torch.tensor(float("nan"))).item()
-            ),
-        }
-        mlflow.log_metrics(payload, step=int(self.current_epoch))
+        return
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         return torch.optim.AdamW(
@@ -131,22 +120,38 @@ def _flatten_dict(d: Mapping[Any, Any], prefix: str = "") -> dict[str, Any]:
 
 
 def _build_decoder(cfg: DictConfig, input_size: int) -> torch.nn.Module:
-    kwargs = {
-        "input_size": input_size,
-        "hidden_size": int(cfg.model.hidden_size),
-        "num_layers": int(cfg.model.num_layers),
-        "dropout": float(cfg.model.dropout),
-    }
+    hidden_size = int(cfg.model.hidden_size)
+    num_layers = int(cfg.model.num_layers)
+    dropout = float(cfg.model.dropout)
     if cfg.model.type == "gru":
-        return GRUDecoder(**kwargs)
-    return LSTMDecoder(**kwargs)
+        return GRUDecoder(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+        )
+    return LSTMDecoder(
+        input_size=input_size,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        dropout=dropout,
+    )
 
 
 def _load_or_synthesize_data(cfg: DictConfig) -> tuple[np.ndarray, np.ndarray]:
     pca_path = Path(cfg.training.latents_path)
     traj_path = Path(cfg.training.trajectory_path)
     if pca_path.exists() and traj_path.exists():
-        return np.load(pca_path), np.load(traj_path)
+        latents = np.load(pca_path)
+        trajectory = np.load(traj_path)
+        if latents.ndim == 2 and trajectory.ndim == 2:
+            seq_len = int(cfg.training.synthetic_seq_len)
+            n_steps = min(latents.shape[0], trajectory.shape[0])
+            n_trials = max(2, n_steps // seq_len)
+            clipped = n_trials * seq_len
+            latents = latents[:clipped].reshape(n_trials, seq_len, latents.shape[1])
+            trajectory = trajectory[:clipped].reshape(n_trials, seq_len, 2)
+        return latents.astype(np.float32), trajectory.astype(np.float32)
 
     rng = np.random.default_rng(int(cfg.project.seed))
     n_trials = int(cfg.training.synthetic_trials)
@@ -171,6 +176,21 @@ def _load_or_synthesize_data(cfg: DictConfig) -> tuple[np.ndarray, np.ndarray]:
             )
         trajectory[trial_idx] += 0.03 * rng.normal(size=(seq_len, 2))
     return latents.astype(np.float32), trajectory.astype(np.float32)
+
+
+def _ensure_pca_artifact(cfg: DictConfig, latents: np.ndarray) -> Path:
+    configured = Path(cfg.training.pca_artifact_path)
+    if configured.exists():
+        return configured
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="ntd_pca_"))
+    pca_path = temp_dir / "pca.pkl"
+    from src.reduction import NeuralPCA
+
+    NeuralPCA(n_components=min(latents.shape[-1], int(cfg.training.synthetic_k))).fit(
+        latents.reshape(-1, latents.shape[-1])
+    ).save(pca_path)
+    return pca_path
 
 
 @hydra.main(version_base=None, config_path="../../configs", config_name="config")
@@ -224,11 +244,28 @@ def run_training(cfg: DictConfig) -> None:
         model.eval()
         with torch.no_grad():
             val_pred, _ = model(torch.as_tensor(val_x, dtype=torch.float32))
-        val_r2 = r2_score_np(val_y, val_pred.numpy())
-        mlflow.log_metric("final_val_r2", float(val_r2))
+        val_r2 = r2_score_np(
+            val_y.reshape(-1, val_y.shape[-1]),
+            val_pred.numpy().reshape(-1, val_pred.shape[-1]),
+        )
+        mlflow.log_metric("loo_cv_r2_mean", float(val_r2))
         mlflow.log_metric("beats_wiener", float(val_r2 > wiener_r2))
 
+        pca_path = _ensure_pca_artifact(cfg, latents)
+        mlflow.log_artifact(str(pca_path), artifact_path="artifacts")
+        mlflow_pytorch.log_model(
+            pytorch_model=model,
+            artifact_path="model",
+            registered_model_name=str(cfg.project.name),
+        )
+
+        active_run = mlflow.active_run()
+        if active_run is None:
+            raise RuntimeError("MLflow active run is unexpectedly None")
+        run_id = active_run.info.run_id
+
         output = {
+            "run_id": run_id,
             "wiener_r2": float(wiener_r2),
             "decoder_r2": float(val_r2),
             "decoder_type": str(cfg.model.type),

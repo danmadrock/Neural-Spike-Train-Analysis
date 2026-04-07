@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1.7
+
+FROM python:3.11.9-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY src ./src
+COPY pyproject.toml README.md ./
+
+RUN python -m pip install --upgrade pip==25.0.1 setuptools==75.8.0 wheel==0.45.1 && \
+    python -m pip install \
+      fastapi==0.110.3 \
+      "uvicorn[standard]==0.29.0" \
+      torch==2.2.2 \
+      numpy==1.26.4 \
+      scipy==1.12.0 \
+      mlflow-skinny==2.11.3 \
+      pydantic==2.7.1 \
+      websockets==12.0
+
+ENV PYTHONPATH=/app \
+    MLFLOW_TRACKING_URI=http://mlflow:5001 \
+    MLFLOW_MODEL_NAME=neural-spiketrain-analysis
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

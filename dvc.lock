@@ -1,7 +1,8 @@
 schema: '2.0'
 stages:
   sort:
-    cmd: PYTHONPATH=. python flows/training_flow.py --stage sort
+    cmd: mkdir -p data/raw && PYTHONPATH=. python flows/training_flow.py --stage
+      sort
     deps:
     - path: configs/sorting/
       hash: md5
@@ -10,13 +11,13 @@ stages:
       nfiles: 1
     - path: data/raw/
       hash: md5
-      md5: d751713988987e9331980363e24189ce.dir
+      md5: 6ffbaaad7b4ac6e1afabed19a80b2560.dir
       size: 0
-      nfiles: 0
+      nfiles: 1
     - path: src/sorting/
       hash: md5
-      md5: 1c6ce059cdfc1480750b494f1976e6a4.dir
-      size: 16718
+      md5: 01c574e1b7dddd42608b75520ceadb8a.dir
+      size: 16766
       nfiles: 10
     params:
       params.yaml:
@@ -30,3 +31,104 @@ stages:
       md5: 6635e5dadaf46216cd771e691dd4cef7.dir
       size: 41
       nfiles: 1
+  bin:
+    cmd: PYTHONPATH=. python flows/training_flow.py --stage bin
+    deps:
+    - path: configs/binning/
+      hash: md5
+      md5: 8b608782ef4f4fb98972264bec954df1.dir
+      size: 0
+      nfiles: 1
+    - path: data/sorted/
+      hash: md5
+      md5: 6635e5dadaf46216cd771e691dd4cef7.dir
+      size: 41
+      nfiles: 1
+    - path: src/binning/
+      hash: md5
+      md5: 8f3cb9933b95fd9944a86fc5f693fe63.dir
+      size: 5671
+      nfiles: 6
+    params:
+      params.yaml:
+        binning:
+          bin_width_ms: 50
+          smoothing_sigma_ms: 25
+          normalize: true
+    outs:
+    - path: data/binned/
+      hash: md5
+      md5: cf8c49b43cf1a024e1e1da880126a44d.dir
+      size: 128
+      nfiles: 1
+  reduce:
+    cmd: PYTHONPATH=. python flows/training_flow.py --stage reduce
+    deps:
+    - path: configs/pca/
+      hash: md5
+      md5: 8b608782ef4f4fb98972264bec954df1.dir
+      size: 0
+      nfiles: 1
+    - path: data/binned/
+      hash: md5
+      md5: cf8c49b43cf1a024e1e1da880126a44d.dir
+      size: 128
+      nfiles: 1
+    - path: src/reduction/
+      hash: md5
+      md5: 08a7e9cafb97597b6a386702a8e6d741.dir
+      size: 11225
+      nfiles: 6
+    params:
+      params.yaml:
+        pca:
+          n_components: 15
+          variance_threshold: 0.9
+    outs:
+    - path: data/pca/
+      hash: md5
+      md5: ea550d19ab52787ac0268281206d0345.dir
+      size: 49384
+      nfiles: 4
+  train:
+    cmd: PYTHONPATH=. python flows/training_flow.py --stage train
+    deps:
+    - path: configs/model/
+      hash: md5
+      md5: f373356870d9986c73da172505ccfc59.dir
+      size: 109
+      nfiles: 2
+    - path: configs/training/
+      hash: md5
+      md5: 769c79af4f77f8e497224bc41ab926e1.dir
+      size: 292
+      nfiles: 1
+    - path: data/pca/
+      hash: md5
+      md5: ea550d19ab52787ac0268281206d0345.dir
+      size: 49384
+      nfiles: 4
+    - path: src/models/
+      hash: md5
+      md5: de09f6a1ead7ec9efd965e3f0a279534.dir
+      size: 14054
+      nfiles: 10
+    - path: src/training/
+      hash: md5
+      md5: 5c0aced56e759a404735b8fcb3d78c5d.dir
+      size: 33306
+      nfiles: 10
+    params:
+      params.yaml:
+        model:
+          type: lstm
+          hidden_size: 256
+          num_layers: 2
+          dropout: 0.3
+        training:
+          lr: 0.001
+          weight_decay: 0.0001
+          l1_lambda: 1e-05
+          max_epochs: 30
+          patience: 5
+          batch_size: 32

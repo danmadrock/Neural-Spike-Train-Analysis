@@ -5,16 +5,16 @@ install:
 	pre-commit install
 
 sort:
-	python flows/training_flow.py --stage sort
+	PYTHONPATH=. python flows/training_flow.py --stage sort
 
 bin:
-	python flows/training_flow.py --stage bin
+	PYTHONPATH=. python flows/training_flow.py --stage bin
 
 reduce:
-	python flows/training_flow.py --stage reduce
+	PYTHONPATH=. python flows/training_flow.py --stage reduce
 
 train:
-	python flows/training_flow.py --stage train
+	PYTHONPATH=. python flows/training_flow.py --stage all
 
 serve:
 	uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
