@@ -1,0 +1,32 @@
+schema: '2.0'
+stages:
+  sort:
+    cmd: PYTHONPATH=. python flows/training_flow.py --stage sort
+    deps:
+    - path: configs/sorting/
+      hash: md5
+      md5: cd056e4f6944c1570896f7529a93b4fa.dir
+      size: 233
+      nfiles: 1
+    - path: data/raw/
+      hash: md5
+      md5: d751713988987e9331980363e24189ce.dir
+      size: 0
+      nfiles: 0
+    - path: src/sorting/
+      hash: md5
+      md5: 1c6ce059cdfc1480750b494f1976e6a4.dir
+      size: 16718
+      nfiles: 10
+    params:
+      params.yaml:
+        sorting:
+          threshold_multiplier: 4.0
+          min_isi_ms: 1.5
+          n_pca_components: 3
+    outs:
+    - path: data/sorted/
+      hash: md5
+      md5: 6635e5dadaf46216cd771e691dd4cef7.dir
+      size: 41
+      nfiles: 1
