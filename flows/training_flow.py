@@ -10,6 +10,7 @@ import numpy as np
 from prefect import flow, get_run_logger, task
 
 from src.binning import bin_spikes
+from src.reduction import NeuralPCA, generate_variance_diagnostics
 from src.sorting.aligner import align_snippets
 from src.sorting.clusterer import cluster_waveforms
 from src.sorting.detector import detect_spikes
@@ -102,9 +103,41 @@ def bin_task(
 
 
 @task
-def reduce_task() -> dict:
-    Path("data/pca").mkdir(parents=True, exist_ok=True)
-    return {"status": "stub"}
+def reduce_task(
+    binned_path: str = "data/binned/binned_matrix.npy",
+    output_dir: str = "data/pca",
+    n_components: int = 15,
+    variance_threshold: float = 0.90,
+) -> dict:
+    logger = get_run_logger()
+    binned_matrix = np.load(Path(binned_path), allow_pickle=False)
+    if binned_matrix.ndim != 2:
+        msg = f"Expected 2D binned matrix at {binned_path}, got {binned_matrix.shape}"
+        raise ValueError(msg)
+
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    pca = NeuralPCA(n_components=n_components).fit(binned_matrix)
+    pca_file = pca.save(out_path / "neural_pca.pkl")
+    scree_file = out_path / "scree.png"
+    threshold_component = generate_variance_diagnostics(
+        neural_pca=pca,
+        variance_threshold=variance_threshold,
+        output_path=scree_file,
+    )
+
+    logger.info(
+        "saved fitted PCA to %s; component for %.2f variance=%d",
+        pca_file,
+        variance_threshold,
+        threshold_component,
+    )
+    return {
+        "pca_path": str(pca_file),
+        "scree_path": str(scree_file),
+        "variance_threshold_component": threshold_component,
+    }
 
 
 @task
@@ -122,7 +155,9 @@ def training_pipeline(
         sort_task()
     elif stage == "bin":
         bin_task(bin_width_ms=bin_width_ms, t_stop=t_stop)
-    elif stage in {"reduce", "train"}:
+    elif stage == "reduce":
+        reduce_task()
+    elif stage == "train":
         logger = get_run_logger()
         logger.info("stage '%s' is currently a placeholder", stage)
     else:
