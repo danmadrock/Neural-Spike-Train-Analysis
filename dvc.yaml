@@ -1,6 +1,6 @@
 stages:
   sort:
-    cmd: python flows/training_flow.py --stage sort
+    cmd: PYTHONPATH=. python flows/training_flow.py --stage sort
     deps:
       - data/raw/
       - src/sorting/
@@ -12,7 +12,7 @@ stages:
           - sorting
 
   bin:
-    cmd: python flows/training_flow.py --stage bin
+    cmd: PYTHONPATH=. python flows/training_flow.py --stage bin
     deps:
       - data/sorted/
       - src/binning/
@@ -24,7 +24,7 @@ stages:
           - binning
 
   reduce:
-    cmd: python flows/training_flow.py --stage reduce
+    cmd: PYTHONPATH=. python flows/training_flow.py --stage reduce
     deps:
       - data/binned/
       - src/reduction/
@@ -36,7 +36,7 @@ stages:
           - pca
 
   train:
-    cmd: python flows/training_flow.py --stage train
+    cmd: PYTHONPATH=. python flows/training_flow.py --stage train
     deps:
       - data/pca/
       - src/models/

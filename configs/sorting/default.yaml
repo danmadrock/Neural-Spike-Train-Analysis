@@ -1,0 +1,10 @@
+threshold_multiplier: 4.0
+snippet_len: 45
+target_trough_index: 15
+refractory_ms: 1.5
+n_pca_components: 3
+gmm_components_min: 1
+gmm_components_max: 8
+snr_threshold: 3.0
+isolation_distance_threshold: 10.0
+isi_violation_threshold: 0.01
