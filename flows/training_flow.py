@@ -1,3 +1,5 @@
+"""Prefect orchestration entrypoint for pipeline stages."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,6 +9,7 @@ from pathlib import Path
 import numpy as np
 from prefect import flow, get_run_logger, task
 
+from src.binning import bin_spikes
 from src.sorting.aligner import align_snippets
 from src.sorting.clusterer import cluster_waveforms
 from src.sorting.detector import detect_spikes
@@ -64,9 +67,38 @@ def sort_task(
 
 
 @task
-def bin_task() -> dict:
-    Path("data/binned").mkdir(parents=True, exist_ok=True)
-    return {"status": "stub"}
+def bin_task(
+    sorted_dir: str = "data/sorted",
+    output_dir: str = "data/binned",
+    bin_width_ms: float = 50.0,
+    t_stop: float | None = None,
+) -> Path:
+    """Load sorted unit spikes, bin them, and save one matrix to data/binned."""
+    logger = get_run_logger()
+    sorted_path = Path(sorted_dir)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    spike_files = sorted(sorted_path.glob("*.npy"))
+    if not spike_files:
+        msg = f"No sorted spike files found in {sorted_path}"
+        raise FileNotFoundError(msg)
+
+    spike_trains = [np.load(path, allow_pickle=False) for path in spike_files]
+    inferred_t_stop = max(
+        (float(np.max(x)) for x in spike_trains if x.size > 0), default=0.0
+    )
+    final_t_stop = t_stop if t_stop is not None else inferred_t_stop
+    if final_t_stop <= 0:
+        msg = "Could not infer positive t_stop from spike data; pass --t-stop"
+        raise ValueError(msg)
+
+    binned = bin_spikes(spike_trains, bin_width_ms=bin_width_ms, t_stop=final_t_stop)
+    out_file = out_path / "binned_matrix.npy"
+    np.save(out_file, binned)
+
+    logger.info("saved binned matrix to %s with shape %s", out_file, binned.shape)
+    return out_file
 
 
 @task
@@ -81,30 +113,32 @@ def train_task() -> dict:
 
 
 @flow
-def training_flow(stage: str = "all") -> dict:
-    if stage == "sort":
-        return {"sort": sort_task()}
-    if stage == "bin":
-        return {"bin": bin_task()}
-    if stage == "reduce":
-        return {"reduce": reduce_task()}
-    if stage == "train":
-        return {"train": train_task()}
+def training_pipeline(
+    stage: str, bin_width_ms: float = 50.0, t_stop: float | None = None
+) -> None:
+    stage = stage.lower()
 
-    return {
-        "sort": sort_task(),
-        "bin": bin_task(),
-        "reduce": reduce_task(),
-        "train": train_task(),
-    }
+    if stage == "sort":
+        sort_task()
+    elif stage == "bin":
+        bin_task(bin_width_ms=bin_width_ms, t_stop=t_stop)
+    elif stage in {"reduce", "train"}:
+        logger = get_run_logger()
+        logger.info("stage '%s' is currently a placeholder", stage)
+    else:
+        msg = f"Unknown stage: {stage}"
+        raise ValueError(msg)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Run Prefect training pipeline stages")
     parser.add_argument(
-        "--stage",
-        default="all",
-        choices=["all", "sort", "bin", "reduce", "train"],
+        "--stage", required=True, choices=["sort", "bin", "reduce", "train"]
     )
+    parser.add_argument("--bin-width-ms", type=float, default=50.0)
+    parser.add_argument("--t-stop", type=float, default=None)
     args = parser.parse_args()
-    training_flow(stage=args.stage)
+
+    training_pipeline(
+        stage=args.stage, bin_width_ms=args.bin_width_ms, t_stop=args.t_stop
+    )
