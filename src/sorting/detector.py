@@ -1,3 +1,5 @@
+"""Spike detection via robust threshold crossing and snippet extraction."""
+
 from __future__ import annotations
 
 import numpy as np
