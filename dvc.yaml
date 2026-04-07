@@ -1,0 +1,49 @@
+stages:
+  sort:
+    cmd: python flows/training_flow.py --stage sort
+    deps:
+      - data/raw/
+      - src/sorting/
+      - configs/sorting/
+    outs:
+      - data/sorted/
+    params:
+      - params.yaml:
+          - sorting
+
+  bin:
+    cmd: python flows/training_flow.py --stage bin
+    deps:
+      - data/sorted/
+      - src/binning/
+      - configs/binning/
+    outs:
+      - data/binned/
+    params:
+      - params.yaml:
+          - binning
+
+  reduce:
+    cmd: python flows/training_flow.py --stage reduce
+    deps:
+      - data/binned/
+      - src/reduction/
+      - configs/pca/
+    outs:
+      - data/pca/
+    params:
+      - params.yaml:
+          - pca
+
+  train:
+    cmd: python flows/training_flow.py --stage train
+    deps:
+      - data/pca/
+      - src/models/
+      - src/training/
+      - configs/model/
+      - configs/training/
+    params:
+      - params.yaml:
+          - model
+          - training

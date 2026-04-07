@@ -8,5 +8,5 @@ defaults:
   - _self_
 
 project:
-  name: neural-trajectory-decoder
+  name: neural-spiketrain-analysis
   seed: 42
