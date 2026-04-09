@@ -1,4 +1,4 @@
-"""Linear Wiener filter baseline decoder."""
+"""Linear Wiener filter baseline decoder"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from src.training.metrics import r2_score_np
 
 
 class WienerFilter:
-    """Least-squares linear decoder from neural rates to 2D trajectory."""
+    """Least-squares linear decoder from neural rates to 2D trajectory"""
 
     def __init__(self) -> None:
         self.coef_: np.ndarray | None = None
