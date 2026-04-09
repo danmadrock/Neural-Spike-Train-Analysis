@@ -35,14 +35,11 @@ class LSTMDecoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Return mean and log-variance predictions for each timestep.
-
         Args:
             x: Tensor of shape ``(batch, T, K)``.
-
         Returns:
             Tuple ``(mean, log_var)`` both with shape ``(batch, T, 2)``.
         """
-
         features, _ = self.rnn(x)
         features = self.output_dropout(features)
         mean = self.mean_head(features)
