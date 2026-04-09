@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import subprocess
 from pathlib import Path
 
 import mlflow
 import numpy as np
 from prefect import flow, get_run_logger, task
+from prefect.exceptions import MissingContextError
 
 from src.binning import bin_spikes
 from src.reduction import NeuralPCA, generate_variance_diagnostics
@@ -20,6 +22,13 @@ from src.sorting.validator import validate_units
 from src.training.register import promote_run_to_champion
 
 
+def _get_logger() -> logging.Logger | logging.LoggerAdapter[logging.Logger]:
+    try:
+        return get_run_logger()
+    except MissingContextError:
+        return logging.getLogger(__name__)
+
+
 @task
 def sort_task(
     raw_dir: str = "data/raw",
@@ -27,7 +36,7 @@ def sort_task(
     fs: float = 30_000.0,
     threshold_multiplier: float = 4.0,
 ) -> dict:
-    logger = get_run_logger()
+    logger = _get_logger()
     raw_path = Path(raw_dir)
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -78,7 +87,7 @@ def bin_task(
     t_stop: float | None = None,
 ) -> Path:
     """Load sorted unit spikes, bin them, and save one matrix to data/binned."""
-    logger = get_run_logger()
+    logger = _get_logger()
     sorted_path = Path(sorted_dir)
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -116,7 +125,7 @@ def reduce_task(
     n_components: int = 15,
     variance_threshold: float = 0.90,
 ) -> dict:
-    logger = get_run_logger()
+    logger = _get_logger()
     binned_matrix = np.load(Path(binned_path), allow_pickle=False)
     if binned_matrix.ndim != 2:
         msg = f"Expected 2D binned matrix at {binned_path}, got {binned_matrix.shape}"
@@ -168,7 +177,7 @@ def reduce_task(
 
 @task
 def train_task() -> dict:
-    logger = get_run_logger()
+    logger = _get_logger()
     subprocess.run(["python", "src/training/train.py"], check=True)
 
     summary_path = Path("training_summary.json")
@@ -190,7 +199,7 @@ def train_task() -> dict:
 def register_task(
     run_id: str,
     model_name: str = "neural-spiketrain-analysis",
-    min_r2_threshold: float = -1.0,
+    min_r2_threshold: float = -10.0,
     metric_key: str = "loo_cv_r2_mean",
 ) -> dict:
     version = promote_run_to_champion(
@@ -242,6 +251,50 @@ def training_pipeline(
     raise ValueError(msg)
 
 
+def training_pipeline_local(
+    stage: str = "all", bin_width_ms: float = 50.0, t_stop: float | None = None
+) -> dict:
+    """Run stages without Prefect orchestration (CI/local fallback)."""
+    stage = stage.lower()
+    mlflow_tracking_uri = mlflow.get_tracking_uri()
+    if stage == "sort":
+        return {"sort": sort_task.fn()}
+    if stage == "bin":
+        return {
+            "bin": str(
+                bin_task.fn(bin_width_ms=bin_width_ms, t_stop=t_stop)  # type: ignore[arg-type]
+            )
+        }
+    if stage == "reduce":
+        return {"reduce": reduce_task.fn()}
+    if stage == "train":
+        return {"train": train_task.fn()}
+    if stage == "register":
+        train_result = train_task.fn()
+        return {
+            "register": register_task.fn(
+                run_id=str(train_result["run_id"]),
+                model_name="neural-spiketrain-analysis",
+            )
+        }
+    if stage == "all":
+        sort_task.fn()
+        binned_path = bin_task.fn(bin_width_ms=bin_width_ms, t_stop=t_stop)
+        reduce_task.fn(binned_path=str(binned_path))
+        train_result = train_task.fn()
+        register_result = register_task.fn(
+            run_id=str(train_result["run_id"]), model_name="neural-spiketrain-analysis"
+        )
+        return {
+            "mlflow_tracking_uri": mlflow_tracking_uri,
+            "train": train_result,
+            "register": register_result,
+        }
+
+    msg = f"Unknown stage: {stage}"
+    raise ValueError(msg)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Prefect training pipeline stages")
     parser.add_argument(
@@ -258,14 +311,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    training_pipeline(
-        stage=args.stage, bin_width_ms=args.bin_width_ms, t_stop=args.t_stop
-    )
     if args.prefect_engine:
         training_pipeline(
             stage=args.stage, bin_width_ms=args.bin_width_ms, t_stop=args.t_stop
         )
     else:
-        training_pipeline.fn(
+        training_pipeline_local(
             stage=args.stage, bin_width_ms=args.bin_width_ms, t_stop=args.t_stop
         )

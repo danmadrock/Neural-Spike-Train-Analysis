@@ -21,9 +21,8 @@ def generate_variance_diagnostics(
         raise ValueError(msg)
 
     cumulative = np.cumsum(neural_pca.explained_variance_ratio_)
-    threshold_idx = int(
-        np.searchsorted(cumulative, variance_threshold, side="left") + 1
-    )
+    raw_idx = int(np.searchsorted(cumulative, variance_threshold, side="left"))
+    threshold_idx = min(raw_idx + 1, cumulative.size)
 
     artifact_path = neural_pca.plot_scree(output_path)
     if mlflow.active_run() is None:

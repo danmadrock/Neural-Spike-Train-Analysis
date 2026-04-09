@@ -150,12 +150,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# project artifacts
+data/
 
-# data and sensitive stuff
-data/raw/
-data/sorted/
-data/binned/
-data/pca/
 mlflow.db
 test_mlflow.py
 mlruns/
