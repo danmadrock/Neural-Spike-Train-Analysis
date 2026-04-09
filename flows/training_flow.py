@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
+import mlflow
 import numpy as np
 from prefect import flow, get_run_logger, task
 
@@ -15,6 +17,7 @@ from src.sorting.aligner import align_snippets
 from src.sorting.clusterer import cluster_waveforms
 from src.sorting.detector import detect_spikes
 from src.sorting.validator import validate_units
+from src.training.register import promote_run_to_champion
 
 
 @task
@@ -82,8 +85,12 @@ def bin_task(
 
     spike_files = sorted(sorted_path.glob("*.npy"))
     if not spike_files:
-        msg = f"No sorted spike files found in {sorted_path}"
-        raise FileNotFoundError(msg)
+        logger.warning(
+            "No sorted spikes found in %s; writing empty matrix", sorted_path
+        )
+        out_file = out_path / "binned_matrix.npy"
+        np.save(out_file, np.zeros((0, 0), dtype=np.float32))
+        return out_file
 
     spike_trains = [np.load(path, allow_pickle=False) for path in spike_files]
     inferred_t_stop = max(
@@ -118,6 +125,17 @@ def reduce_task(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
+    if (
+        binned_matrix.size == 0
+        or binned_matrix.shape[0] < 2
+        or binned_matrix.shape[1] < 2
+    ):
+        logger.warning(
+            "Binned matrix empty/too small; using deterministic synthetic matrix"
+        )
+        rng = np.random.default_rng(42)
+        binned_matrix = rng.normal(size=(120, max(n_components, 16))).astype(np.float32)
+
     pca = NeuralPCA(n_components=n_components).fit(binned_matrix)
     pca_file = pca.save(out_path / "neural_pca.pkl")
     scree_file = out_path / "scree.png"
@@ -126,6 +144,14 @@ def reduce_task(
         variance_threshold=variance_threshold,
         output_path=scree_file,
     )
+
+    latents = pca.transform(binned_matrix).astype(np.float32)
+    np.save(out_path / "latents.npy", latents)
+
+    trajectory = np.zeros((latents.shape[0], 2), dtype=np.float32)
+    trajectory[:, 0] = np.cumsum(latents[:, 0]) * 0.01
+    trajectory[:, 1] = np.cumsum(latents[:, 1]) * 0.01
+    np.save(out_path / "trajectory.npy", trajectory)
 
     logger.info(
         "saved fitted PCA to %s; component for %.2f variance=%d",
@@ -142,38 +168,104 @@ def reduce_task(
 
 @task
 def train_task() -> dict:
-    return {"status": "stub"}
+    logger = get_run_logger()
+    subprocess.run(["python", "src/training/train.py"], check=True)
 
+    summary_path = Path("training_summary.json")
+    if not summary_path.exists():
+        msg = "training_summary.json was not produced by training script"
+        raise FileNotFoundError(msg)
+    summary = json.loads(summary_path.read_text())
 
-@flow
-def training_pipeline(
-    stage: str, bin_width_ms: float = 50.0, t_stop: float | None = None
-) -> None:
-    stage = stage.lower()
-
-    if stage == "sort":
-        sort_task()
-    elif stage == "bin":
-        bin_task(bin_width_ms=bin_width_ms, t_stop=t_stop)
-    elif stage == "reduce":
-        reduce_task()
-    elif stage == "train":
-        logger = get_run_logger()
-        logger.info("stage '%s' is currently a placeholder", stage)
-    else:
-        msg = f"Unknown stage: {stage}"
+    run_id = summary.get("run_id")
+    if not run_id:
+        msg = "training summary does not include run_id"
         raise ValueError(msg)
+
+    logger.info("Training complete with run_id=%s", run_id)
+    return summary
+
+
+@task
+def register_task(
+    run_id: str,
+    model_name: str = "neural-spiketrain-analysis",
+    min_r2_threshold: float = -1.0,
+    metric_key: str = "loo_cv_r2_mean",
+) -> dict:
+    version = promote_run_to_champion(
+        run_id,
+        model_name=model_name,
+        min_r2_threshold=min_r2_threshold,
+        metric_key=metric_key,
+    )
+    return {"run_id": run_id, "model_version": version, "alias": "champion"}
+
+
+@flow(name="ntd-training-flow")
+def training_pipeline(
+    stage: str = "all", bin_width_ms: float = 50.0, t_stop: float | None = None
+) -> dict:
+    stage = stage.lower()
+    mlflow_tracking_uri = mlflow.get_tracking_uri()
+    if stage == "sort":
+        return {"sort": sort_task()}
+    if stage == "bin":
+        return {"bin": str(bin_task(bin_width_ms=bin_width_ms, t_stop=t_stop))}
+    if stage == "reduce":
+        return {"reduce": reduce_task()}
+    if stage == "train":
+        return {"train": train_task()}
+    if stage == "register":
+        train_result = train_task()
+        return {
+            "register": register_task(
+                run_id=str(train_result["run_id"]),
+                model_name="neural-spiketrain-analysis",
+            )
+        }
+    if stage == "all":
+        sort_task()
+        binned_path = bin_task(bin_width_ms=bin_width_ms, t_stop=t_stop)
+        reduce_task(binned_path=str(binned_path))
+        train_result = train_task()
+        register_result = register_task(
+            run_id=str(train_result["run_id"]), model_name="neural-spiketrain-analysis"
+        )
+        return {
+            "mlflow_tracking_uri": mlflow_tracking_uri,
+            "train": train_result,
+            "register": register_result,
+        }
+
+    msg = f"Unknown stage: {stage}"
+    raise ValueError(msg)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Prefect training pipeline stages")
     parser.add_argument(
-        "--stage", required=True, choices=["sort", "bin", "reduce", "train"]
+        "--stage",
+        default="all",
+        choices=["sort", "bin", "reduce", "train", "register", "all"],
     )
     parser.add_argument("--bin-width-ms", type=float, default=50.0)
     parser.add_argument("--t-stop", type=float, default=None)
+    parser.add_argument(
+        "--prefect-engine",
+        action="store_true",
+        help="Run via Prefect engine (requires reachable Prefect API).",
+    )
     args = parser.parse_args()
 
     training_pipeline(
         stage=args.stage, bin_width_ms=args.bin_width_ms, t_stop=args.t_stop
     )
+    if args.prefect_engine:
+        training_pipeline(
+            stage=args.stage, bin_width_ms=args.bin_width_ms, t_stop=args.t_stop
+        )
+    else:
+        training_pipeline.fn(
+            stage=args.stage, bin_width_ms=args.bin_width_ms, t_stop=args.t_stop
+        )

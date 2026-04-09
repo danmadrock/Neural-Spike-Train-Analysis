@@ -22,6 +22,6 @@ training:
   lr: 0.001
   weight_decay: 0.0001
   l1_lambda: 0.00001
-  max_epochs: 200
-  patience: 20
+  max_epochs: 30
+  patience: 5
   batch_size: 32

@@ -1,6 +1,6 @@
 stages:
   sort:
-    cmd: PYTHONPATH=. python flows/training_flow.py --stage sort
+    cmd: mkdir -p data/raw && PYTHONPATH=. python flows/training_flow.py --stage sort
     deps:
       - data/raw/
       - src/sorting/
